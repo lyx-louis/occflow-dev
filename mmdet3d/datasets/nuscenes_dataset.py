@@ -712,6 +712,12 @@ class NuScenesDataset(Custom3DDataset):
         count = 0
         print('\nStarting Evaluation...')
         processed_set = set()
+        
+        map_list = [4, 10, 9, 3, 5, 2, 6, 7, 8, 1, 11, 12, 13, 14, 15, 16, 17]
+        # import pickle
+        # with open('/mnt/yrfs/userdata/ywc/FB-BEV/result.pkl', "wb") as f:
+        #     pickle.dump(occ_results, f)
+        
         for occ_pred_w_index in tqdm(occ_results):
             index = occ_pred_w_index['index']
             if index in processed_set: continue
@@ -727,6 +733,13 @@ class NuScenesDataset(Custom3DDataset):
             gt_semantics = occ_gt['semantics']
             mask_lidar = occ_gt['mask_lidar'].astype(bool)
             mask_camera = occ_gt['mask_camera'].astype(bool)            
+            
+            # for new dataset !!!!
+            occ = np.zeros(gt_semantics.shape)
+            occ[:, :, :] = -1
+            for i in range(17):
+                occ[gt_semantics==i] = map_list[i]
+            gt_semantics = occ
             # if show_dir is not None:
             #     if begin is not None and end is not None:
             #         if index>= begin and index<end:

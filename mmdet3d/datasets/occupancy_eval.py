@@ -1,8 +1,8 @@
-from .occ_metrics import Metric_mIoU, Metric_FScore
+from occ_metrics import Metric_mIoU, Metric_FScore
 import argparse
 import os 
 import sys
-import nunmpy as np
+import numpy as np
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -31,8 +31,10 @@ def eval(args):
                 void=[17, 255],
                 use_lidar_mask=False,
                 use_image_mask=True,)
+    map_list = [4, 10, 9, 3, 5, 2, 6, 7, 8, 1, 11, 12, 13, 14, 15, 16, 17]
+    
     for pred_path in os.listdir(args.pred_path):
-        occ_pred = np.load(os.path.join(args.pred_path, pred_path))['pred']
+        occ_pred = np.load(os.path.join(args.pred_path, pred_path))['pred_occupancy']
         occ_gt = np.load(os.path.join(args.gt_path, pred_path.split('.')[0], 'labels.npz'))
         gt_semantics = occ_gt['semantics']
         mask_lidar = occ_gt['mask_lidar'].astype(bool)
@@ -45,6 +47,6 @@ def eval(args):
             fscore_eval_metrics.count_fscore()
         
 
-if __main__:
+if __name__ == '__main__':
     args = parse_args()
     eval(args)

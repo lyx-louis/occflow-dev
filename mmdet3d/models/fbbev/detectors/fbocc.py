@@ -527,11 +527,14 @@ class FBOCC(CenterPoint):
 
 
         if self.with_specific_component('occupancy_head'):
-            pred_occupancy = self.occupancy_head(results['img_bev_feat'], results=results, **kwargs)['output_voxels'][0]
+            out = self.occupancy_head(results['img_bev_feat'], results=results, **kwargs)
+            pred_occupancy = out['output_voxels'][0]
+            pred_flow = out['output_flows'][0]
 
             pred_occupancy = pred_occupancy.permute(0, 2, 3, 4, 1)[0]
+            pred_flow = pred_flow.permute(0, 2, 3, 4, 1)[0]
             if self.fix_void:
-                pred_occupancy = pred_occupancy[..., 1:]     
+                pred_occupancy = pred_occupancy[..., 1:]
             pred_occupancy = pred_occupancy.softmax(-1)
 
 
@@ -541,6 +544,11 @@ class FBOCC(CenterPoint):
             pred_occupancy = torch.rot90(pred_occupancy, -1, [2, 3])
             pred_occupancy = pred_occupancy.permute(2, 3, 1, 0)
             
+            pred_flow = pred_flow.permute(3, 2, 0, 1)
+            pred_flow = torch.flip(pred_flow, [2])
+            pred_flow = torch.rot90(pred_flow, -1, [2, 3])
+            pred_flow = pred_flow.permute(2, 3, 1, 0)
+
             if return_raw_occ:
                 pred_occupancy_category = pred_occupancy
             else:
@@ -559,18 +567,24 @@ class FBOCC(CenterPoint):
 
             # For test server
             if self.occupancy_save_path is not None:
-                    scene_name = img_metas[0]['scene_name']
-                    sample_token = img_metas[0]['sample_idx']
-                    # mask_camera = visible_mask[0][0]
-                    # masked_pred_occupancy = pred_occupancy[mask_camera].cpu().numpy()
-                    save_pred_occupancy = pred_occupancy.argmax(-1).cpu().numpy()
-                    save_path = os.path.join(self.occupancy_save_path, 'occupancy_pred', f'{sample_token}.npz')
-                    np.savez_compressed(save_path, save_pred_occupancy.astype(np.uint8)) 
+                scene_name = img_metas[0]['scene_name']
+                sample_token = img_metas[0]['sample_idx']
+                # mask_camera = visible_mask[0][0]
+                # masked_pred_occupancy = pred_occupancy[mask_camera].cpu().numpy()
+                save_pred_occupancy = pred_occupancy.argmax(-1).cpu().numpy()
+                save_pred_flow = save_pred_flow.cpu().numpy()
+                
+                save_path_occ = os.path.join(self.occupancy_save_path, 'occupancy_pred', f'{sample_token}.npz')
+                save_path_flow = os.path.join(self.occupancy_save_path, 'flow_pred', f'{sample_token}.npz')
+                np.savez_compressed(save_path_occ, save_pred_occupancy.astype(np.uint8)) 
+                np.savez_compressed(save_path_flow, save_pred_flow.astype(np.uint8)) 
 
             pred_occupancy_category= pred_occupancy_category.cpu().numpy()
+            pred_flow= pred_flow.cpu().numpy()
 
         else:
             pred_occupancy_category =  None
+            pred_flow =  None
 
         if results.get('bev_mask_logit', None) is not None:
             pred_bev_mask = results['bev_mask_logit'].sigmoid() > 0.5
@@ -583,6 +597,7 @@ class FBOCC(CenterPoint):
             result_dict['pts_bbox'] = bbox_pts[i]
             result_dict['iou'] = iou
             result_dict['pred_occupancy'] = pred_occupancy_category
+            result_dict['pred_flow'] = pred_flow
             result_dict['index'] = img_metas[0]['index']
         return bbox_list
 

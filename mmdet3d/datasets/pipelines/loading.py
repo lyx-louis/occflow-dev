@@ -186,18 +186,25 @@ class LoadOccupancy(object):
         occupancy_file_path = osp.join(self.occupancy_path, scene_name, sample_token, 'labels.npz')
         data = np.load(occupancy_file_path)
         occupancy = torch.tensor(data['semantics'])
+        flow = torch.tensor(data['flow'])
         visible_mask = torch.tensor(data[self.mask])
         # visible_mask_lidar = data['mask_lidar']
 
         if self.ignore_nonvisible:
             occupancy[~visible_mask.to(torch.bool)] = 255
+            flow[~visible_mask.to(torch.bool)] = 255
 
 
         # to BEVDet format
         occupancy = occupancy.permute(2, 0, 1)
+        flow = flow.permute(3, 2, 0, 1)
+        
         occupancy = torch.rot90(occupancy, 1, [1, 2])
+        flow = torch.rot90(flow, 1, [2, 3])
         occupancy = torch.flip(occupancy, [1])
+        flow = torch.flip(flow, [2])
         occupancy = occupancy.permute(1, 2, 0)
+        flow = flow.permute(2, 3, 1, 0)
 
         
         if self.fix_void:
@@ -205,20 +212,26 @@ class LoadOccupancy(object):
 
         for class_ in self.ignore_classes:
             occupancy[occupancy==class_] = 255
+            flow[flow==class_] = 255
 
         if results['rotate_bda'] != 0:
             occupancy = occupancy.permute(2, 0, 1)
             occupancy = rotate(occupancy, -results['rotate_bda'], fill=255).permute(1, 2, 0)
+            flow = flow.permute(3, 2, 0, 1)
+            flow = rotate(flow, -results['rotate_bda'], fill=255).permute(2, 3, 1, 0)
 
         if results['flip_dx']:
             occupancy = torch.flip(occupancy, [1])
+            flow = torch.flip(flow, [1])
 
         if results['flip_dy']:
             occupancy = torch.flip(occupancy, [0])
+            flow = torch.flip(flow, [0])
 
 
 
         results['gt_occupancy'] = occupancy
+        results['gt_occupancy_flow'] = flow
         results['visible_mask'] = visible_mask
         
         results['visible_mask_bev'] = (occupancy==255).sum(-1)

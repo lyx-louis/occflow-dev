@@ -65,6 +65,7 @@ class OccHead(BaseModule):
                 "loss_voxel_sem_scal_weight": 1.0,
                 "loss_voxel_geo_scal_weight": 1.0,
                 "loss_voxel_lovasz_weight": 1.0,
+                "loss_flow_l1_weight": 1.0
             }
         else:
             self.loss_weight_cfg = loss_weight_cfg
@@ -75,7 +76,9 @@ class OccHead(BaseModule):
         self.loss_voxel_geo_scal_weight = self.loss_weight_cfg.get('loss_voxel_geo_scal_weight', 1.0)
         self.loss_voxel_lovasz_weight = self.loss_weight_cfg.get('loss_voxel_lovasz_weight', 1.0)
         
-
+        # flow losses
+        self.loss_flow_l1loss = nn.L1Loss(reduction='none')
+        self.loss_flow_l1_weight = self.loss_weight_cfg.get('loss_flow_l1_weight', 1.0)
 
         # voxel-level prediction
         self.occ_convs = nn.ModuleList()
@@ -96,6 +99,14 @@ class OccHead(BaseModule):
                 nn.ReLU(inplace=True),
                 build_conv_layer(conv_cfg, in_channels=mid_channel//2, 
                         out_channels=out_channel, kernel_size=1, stride=1, padding=0))
+
+        self.flow_pred_conv = nn.Sequential(
+                build_conv_layer(conv_cfg, in_channels=mid_channel, 
+                        out_channels=mid_channel//2, kernel_size=1, stride=1, padding=0),
+                build_norm_layer(norm_cfg, mid_channel//2)[1],
+                nn.ReLU(inplace=True),
+                build_conv_layer(conv_cfg, in_channels=mid_channel//2, 
+                        out_channels=2, kernel_size=1, stride=1, padding=0)) # hard code: (x, y)
 
         self.soft_weights = soft_weights
         self.num_point_sampling_feat = self.num_level + 1 * self.use_deblock
@@ -173,11 +184,14 @@ class OccHead(BaseModule):
             out_voxel_feats += feats * weights.unsqueeze(1)
         output['out_voxel_feats'] = [out_voxel_feats]
         if self.with_cp and  out_voxel_feats.requires_grad:
-            out_voxel = cp(self.occ_pred_conv, out_voxel_feats)
+            out_occ = cp(self.occ_pred_conv, out_voxel_feats)
+            out_flow = cp(self.flow_pred_conv, out_voxel_feats)
         else:
-            out_voxel = self.occ_pred_conv(out_voxel_feats)
+            out_occ = self.occ_pred_conv(out_voxel_feats)
+            out_flow = self.flow_pred_conv(out_voxel_feats)
 
-        output['occ'] = [out_voxel]
+        output['occ'] = [out_occ]
+        output['flow'] = [out_flow]
 
         return output
      
@@ -189,9 +203,11 @@ class OccHead(BaseModule):
         output = self.forward_coarse_voxel(voxel_feats)
         out_voxel_feats = output['out_voxel_feats'][0]
         coarse_occ = output['occ'][0]
+        coarse_flow = output['flow'][0]
 
         res = {
             'output_voxels': output['occ'],
+            'output_flows': output['flow'],
             'output_voxels_fine': output.get('fine_output', None),
             'output_coords_fine': output.get('fine_coord', None),
         }
@@ -202,8 +218,11 @@ class OccHead(BaseModule):
     @force_fp32()
     def forward_train(self, voxel_feats, img_feats=None, pts_feats=None, transform=None, gt_occupancy=None, gt_occupancy_flow=None, **kwargs):
         res = self.forward(voxel_feats, img_feats=img_feats, pts_feats=pts_feats, transform=transform, **kwargs)
-        loss = self.loss(target_voxels=gt_occupancy,
+        loss = self.loss(
+            target_voxels=gt_occupancy,
+            target_flows=gt_occupancy_flow,
             output_voxels = res['output_voxels'],
+            output_flows = res['output_flows'],
             output_coords_fine=res['output_coords_fine'],
             output_voxels_fine=res['output_voxels_fine'])
 
@@ -257,10 +276,43 @@ class OccHead(BaseModule):
         return loss_dict
 
     @force_fp32() 
-    def loss(self, output_voxels=None,
-                output_coords_fine=None, output_voxels_fine=None, 
-                target_voxels=None, visible_mask=None, **kwargs):
+    def loss_flow(self, output_flows, target_flows, tag):
+
+        # resize gt                       
+        B, C, H, W, D = output_flows.shape
+        ratio = target_flows.shape[2] // H
+        assert ratio == 1
+        # if ratio != 1:
+        #     target_voxels = target_voxels.reshape(B, H, ratio, W, ratio, D, ratio).permute(0,1,3,5,2,4,6).reshape(B, H, W, D, ratio**3)
+        #     empty_mask = target_voxels.sum(-1) == self.empty_idx
+        #     target_voxels = target_voxels.to(torch.int64)
+        #     occ_space = target_voxels[~empty_mask]
+        #     occ_space[occ_space==0] = -torch.arange(len(occ_space[occ_space==0])).to(occ_space.device) - 1
+        #     target_voxels[~empty_mask] = occ_space
+        #     target_voxels = torch.mode(target_voxels, dim=-1)[0]
+        #     target_voxels[target_voxels<0] = 255
+        #     target_voxels = target_voxels.long()
+
+        output_flows[torch.isnan(output_flows)] = 0
+        output_flows[torch.isinf(output_flows)] = 0
+        assert torch.isnan(output_flows).sum().item() == 0
+        assert torch.isnan(output_flows).sum().item() == 0
+
         loss_dict = {}
-        for index, output_voxel in enumerate(output_voxels):
+
+        target_flows = target_flows.permute(0, 4, 1, 2, 3)
+        mask = (target_flows!=255)
+        loss = self.loss_flow_l1loss(output_flows, target_flows)
+        
+        loss_dict['loss_flow_l1_{}'.format(tag)] = self.loss_flow_l1_weight * (loss * mask).sum() / mask.sum()
+        return loss_dict
+
+
+    @force_fp32() 
+    def loss(self, output_voxels=None, output_flows=None, output_coords_fine=None, output_voxels_fine=None, 
+            target_voxels=None, target_flows=None, visible_mask=None, **kwargs):
+        loss_dict = {}
+        for index, (output_voxel, output_flow) in enumerate(zip(output_voxels, output_flows)):
             loss_dict.update(self.loss_voxel(output_voxel, target_voxels,  tag='c_{}'.format(index)))
+            loss_dict.update(self.loss_flow(output_flow, target_flows,  tag='c_{}'.format(index)))
         return loss_dict

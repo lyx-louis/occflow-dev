@@ -6,8 +6,8 @@
 
 
 # we follow the online training settings  from solofusion
-num_gpus = 16
-samples_per_gpu = 4
+num_gpus = 1
+samples_per_gpu = 3
 num_iters_per_epoch = int(28130 // (num_gpus * samples_per_gpu) * 4.554)
 num_epochs = 20
 checkpoint_epoch_interval = 1
@@ -117,7 +117,7 @@ model = dict(
     single_bev_num_channels=numC_Trans,
     readd=True,
     img_backbone=dict(
-        pretrained='ckpts/resnet50-0676ba61.pth',
+        # pretrained='ckpts/resnet50-0676ba61.pth',
         type='ResNet',
         depth=50,
         num_stages=4,
@@ -253,7 +253,7 @@ model = dict(
 dataset_type = 'NuScenesDataset'
 data_root = 'data/nuscenes/'
 file_client_args = dict(backend='disk')
-occupancy_path = '/mount/data/occupancy_cvpr2023/gts'
+occupancy_path = '/mnt/yrfs/userdata/ywc/FB-BEV/data/nuscenes/gts'
 
 
 train_pipeline = [
@@ -277,7 +277,7 @@ train_pipeline = [
     dict(type='LoadOccupancy', ignore_nonvisible=True, fix_void=fix_void, occupancy_path=occupancy_path),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
     dict(
-        type='Collect3D', keys=['img_inputs', 'gt_bboxes_3d', 'gt_labels_3d',  'gt_occupancy', 'gt_depth'
+        type='Collect3D', keys=['img_inputs', 'gt_bboxes_3d', 'gt_labels_3d',  'gt_occupancy', 'gt_depth', 'gt_occupancy_flow'
                                ])
 ]
 
@@ -390,5 +390,5 @@ custom_hooks = [
         temporal_start_iter=num_iters_per_epoch *2,
     ),
 ]
-load_from = 'ckpts/r50_256x705_depth_pretrain.pth'
+load_from = '/mnt/yrfs/userdata/ywc/FB-BEV/ckpts/r50_256x705_depth_pretrain.pth'
 fp16 = dict(loss_scale='dynamic')
